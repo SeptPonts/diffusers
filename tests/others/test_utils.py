@@ -269,6 +269,37 @@ class TestRandnTensor:
         assert "moved to" in cuda_out, f"Non-MPS target should still emit the CPU-fallback info log, got: {cuda_out}"
 
 
+class TestBackendUtils:
+    """Exercise device helpers against real accelerator allocations."""
+
+    @pytest.mark.parametrize("module_name", ["diffusers.utils.torch_utils", "tests.testing_utils"])
+    def test_device_count_and_peak_memory(self, module_name):
+        """Memory helpers must report allocations and reset peaks on the selected device."""
+        import torch
+
+        from ..testing_utils import torch_device
+
+        if torch_device not in ("cuda", "xpu", "mlu"):
+            pytest.skip("Requires an accelerator with allocator memory statistics.")
+
+        utilities = importlib.import_module(module_name)
+        assert utilities.backend_device_count(torch_device) > 0
+        utilities.backend_empty_cache(torch_device)
+
+        for reset_peak in (utilities.backend_reset_peak_memory_stats, utilities.backend_reset_max_memory_allocated):
+            reset_peak(torch_device)
+            initial_memory = utilities.backend_max_memory_allocated(torch_device)
+            tensor = torch.empty((1024, 1024), device=torch_device)
+            utilities.backend_synchronize(torch_device)
+            assert utilities.backend_max_memory_allocated(torch_device) >= (
+                initial_memory + tensor.numel() * tensor.element_size()
+            )
+            del tensor
+            reset_peak(torch_device)
+            assert utilities.backend_max_memory_allocated(torch_device) == initial_memory
+        utilities.backend_empty_cache(torch_device)
+
+
 # Copied from https://github.com/huggingface/transformers/blob/main/tests/utils/test_expectations.py
 class TestExpectations:
     def test_expectations(self):
